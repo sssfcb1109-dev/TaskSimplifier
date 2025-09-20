@@ -1,6 +1,7 @@
 # TaskSimplifier
 
-This repository provides a minimal Flask API for demonstration.
+This repository provides a minimal Flask API for demonstrating a "one-shot" task
+automation flow.
 
 ## Usage
 
@@ -12,8 +13,18 @@ This repository provides a minimal Flask API for demonstration.
    ```bash
    python app.py
    ```
-3. Send a POST request with JSON payload:
+3. Send a POST request to `/one-shot-plan` with a JSON payload such as:
    ```json
-   {"from": "alice@example.com", "subject": "Hello", "body": "Hi there"}
+   {
+     "scenario": "Need help with UCLA post-arrival orientation",
+     "preferred_name": "Alex",
+     "term": "Fall 2024"
+   }
    ```
-   to `/reply` to receive a fixed automated response.
+   The API responds with a single confirmation sheet that summarizes assumptions,
+   required inputs, proposed automations, and reference links for the UCLA
+   post-arrival orientation flow.
+
+4. Provide any other scenario description to receive a placeholder response that
+   explains what extra detail the agent still needs before it can build a
+   confirmation sheet.
