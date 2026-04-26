@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 
 app = Flask(__name__)
 
+
+
+
+@app.route('/', methods=['GET'])
+def index():
+    return render_template('index.html')
 
 @app.route('/reply', methods=['POST'])
 def reply():
