@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3軸ロボットアーム IK デモ</title>
+  <style>
+    :root {
+      --bg: #080c12;
+      --panel: rgba(13, 19, 27, 0.88);
+      --line: #1b2936;
+      --text: #e9f1ff;
+      --muted: #9bb0c7;
+      --accent: #ff8c2a;
+      --accent-soft: rgba(255, 140, 42, 0.25);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, "Noto Sans JP", system-ui, -apple-system, sans-serif;
+    }
+
+    #viewport {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+
+    .hud {
+      pointer-events: none;
+      position: fixed;
+      inset: 0;
+      display: flex;
+      justify-content: space-between;
+      padding: 16px;
+      gap: 16px;
+    }
+
+    .panel {
+      width: min(360px, 28vw);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 12px 26px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255,255,255,0.04);
+      pointer-events: auto;
+    }
+
+    .title {
+      margin: 0 0 10px;
+      font-size: 0.95rem;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+
+    .state-badge {
+      display: inline-block;
+      margin-bottom: 12px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--accent-soft);
+      background: rgba(255, 140, 42, 0.15);
+      color: #ffc89c;
+      font-size: 0.82rem;
+    }
+
+    .gauge { margin-bottom: 12px; }
+
+    .gauge-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .gauge-track {
+      height: 10px;
+      border-radius: 999px;
+      border: 1px solid #223447;
+      background: #0f1822;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .gauge-fill {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 50%;
+      background: linear-gradient(90deg, rgba(255,140,42,0.45), rgba(255,165,86,0.95));
+      box-shadow: 0 0 16px rgba(255,140,42,0.45);
+    }
+
+    #speedGraph {
+      width: 100%;
+      height: 130px;
+      border: 1px solid #223447;
+      border-radius: 10px;
+      display: block;
+      background: linear-gradient(180deg, #0e1822, #0b121a);
+      margin-bottom: 10px;
+    }
+
+    #commandLog {
+      margin: 0;
+      padding-left: 18px;
+      max-height: 240px;
+      overflow: auto;
+      color: #bfd2e6;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+
+    #commandLog li { margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <canvas id="viewport"></canvas>
+
+  <div class="hud">
+    <section class="panel">
+      <h2 class="title">Joint Angles</h2>
+      <div class="state-badge" id="stateLabel">state: idle</div>
+
+      <div class="gauge">
+        <div class="gauge-row"><span>Base</span><span id="baseVal">0°</span></div>
+        <div class="gauge-track"><div id="baseGauge" class="gauge-fill"></div></div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-row"><span>Shoulder</span><span id="shoulderVal">0°</span></div>
+        <div class="gauge-track"><div id="shoulderGauge" class="gauge-fill"></div></div>
+      </div>
+
+      <div class="gauge">
+        <div class="gauge-row"><span>Elbow</span><span id="elbowVal">0°</span></div>
+        <div class="gauge-track"><div id="elbowGauge" class="gauge-fill"></div></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="title">Telemetry / Command Log</h2>
+      <canvas id="speedGraph" width="330" height="130"></canvas>
+      <ol id="commandLog"></ol>
+    </section>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js';
+    import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/controls/OrbitControls.js';
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x070b10);
+
+    const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100);
+    camera.position.set(6, 5.4, 7.5);
+
+    const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('viewport'), antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.shadowMap.enabled = true;
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 1.2, 0);
+    controls.enableDamping = true;
+
+    const ambient = new THREE.HemisphereLight(0xa6b5cc, 0x1f2b36, 0.55);
+    scene.add(ambient);
+
+    const dir = new THREE.DirectionalLight(0xfff4dd, 1.0);
+    dir.position.set(7, 10, 5);
+    dir.castShadow = true;
+    dir.shadow.mapSize.set(2048, 2048);
+    scene.add(dir);
+
+    scene.add(new THREE.GridHelper(16, 32, 0x2f3a4a, 0x1a2230));
+
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(18, 18),
+      new THREE.MeshStandardMaterial({ color: 0x0d141d, roughness: 0.92, metalness: 0.05 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const armRoot = new THREE.Group();
+    scene.add(armRoot);
+
+    const baseHeight = 0.5;
+    const L1 = 2.0;
+    const L2 = 1.6;
+    const gripperLen = 0.48;
+
+    const base = new THREE.Group();
+    armRoot.add(base);
+
+    const baseMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.55, 0.72, baseHeight, 32),
+      new THREE.MeshStandardMaterial({ color: 0x273747, metalness: 0.6, roughness: 0.34 })
+    );
+    baseMesh.position.y = baseHeight / 2;
+    baseMesh.castShadow = true;
+    baseMesh.receiveShadow = true;
+    base.add(baseMesh);
+
+    const shoulderPivot = new THREE.Group();
+    shoulderPivot.position.y = baseHeight;
+    base.add(shoulderPivot);
+
+    const upperArm = new THREE.Mesh(
+      new THREE.BoxGeometry(L1, 0.25, 0.25),
+      new THREE.MeshStandardMaterial({ color: 0xff8c2a, metalness: 0.35, roughness: 0.45 })
+    );
+    upperArm.position.x = L1 / 2;
+    upperArm.castShadow = true;
+    shoulderPivot.add(upperArm);
+
+    const elbowPivot = new THREE.Group();
+    elbowPivot.position.x = L1;
+    shoulderPivot.add(elbowPivot);
+
+    const foreArm = new THREE.Mesh(
+      new THREE.BoxGeometry(L2, 0.2, 0.2),
+      new THREE.MeshStandardMaterial({ color: 0x7ea4c6, metalness: 0.28, roughness: 0.5 })
+    );
+    foreArm.position.x = L2 / 2;
+    foreArm.castShadow = true;
+    elbowPivot.add(foreArm);
+
+    const gripper = new THREE.Group();
+    gripper.position.x = L2;
+    elbowPivot.add(gripper);
+
+    const jawMat = new THREE.MeshStandardMaterial({ color: 0xbfcde0, metalness: 0.62, roughness: 0.32 });
+    const jawL = new THREE.Mesh(new THREE.BoxGeometry(gripperLen, 0.08, 0.06), jawMat);
+    const jawR = jawL.clone();
+    jawL.position.set(gripperLen / 2, 0.07, -0.05);
+    jawR.position.set(gripperLen / 2, -0.07, 0.05);
+    jawL.castShadow = jawR.castShadow = true;
+    gripper.add(jawL, jawR);
+
+    const tipMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.06, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0xff8c2a })
+    );
+    gripper.add(tipMarker);
+    tipMarker.position.x = gripperLen;
+
+    const pickDropObjects = [];
+    const cubeGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+    const blueMat = new THREE.MeshStandardMaterial({ color: 0x2f7fff, roughness: 0.45, metalness: 0.22 });
+    const orangeMat = new THREE.MeshStandardMaterial({ color: 0xffa333, roughness: 0.45, metalness: 0.22 });
+
+    for (let i = 0; i < 8; i++) {
+      const mesh = new THREE.Mesh(cubeGeo, i < 4 ? blueMat : orangeMat);
+      const row = i % 4;
+      const sideX = i < 4 ? -2.6 : 2.6;
+      const z = -1.4 + row * 0.95;
+      mesh.position.set(sideX, 0.15, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+      pickDropObjects.push({
+        mesh,
+        grabbed: false,
+        moved: false,
+        pickup: mesh.position.clone(),
+        drop: new THREE.Vector3(-sideX, 0.15, z)
+      });
+    }
+
+    const stateLabel = document.getElementById('stateLabel');
+    const logEl = document.getElementById('commandLog');
+    const speedCanvas = document.getElementById('speedGraph');
+    const speedCtx = speedCanvas.getContext('2d');
+
+    const gaugeRefs = {
+      base: { value: document.getElementById('baseVal'), fill: document.getElementById('baseGauge') },
+      shoulder: { value: document.getElementById('shoulderVal'), fill: document.getElementById('shoulderGauge') },
+      elbow: { value: document.getElementById('elbowVal'), fill: document.getElementById('elbowGauge') }
+    };
+
+    function logCommand(message) {
+      const item = document.createElement('li');
+      item.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+      logEl.prepend(item);
+      while (logEl.children.length > 16) {
+        logEl.removeChild(logEl.lastChild);
+      }
+    }
+
+    let joints = { base: 0, shoulder: 0.5, elbow: -0.85 };
+    let targetJoints = { ...joints };
+
+    let state = 'idle';
+    let activeItem = null;
+    let holdTimer = 0;
+
+    const motion = {
+      target: new THREE.Vector3(2.2, 1.6, 0),
+      hoveringOffset: 0.55,
+      liftHeight: 1.4,
+      dropLift: 0.7
+    };
+
+    const tipHistory = [];
+    let prevTip = new THREE.Vector3();
+
+    function setState(next) {
+      state = next;
+      stateLabel.textContent = `state: ${state}`;
+      logCommand(`state -> ${state}`);
+    }
+
+    function forwardKinematics() {
+      const r = L1 * Math.cos(joints.shoulder) + L2 * Math.cos(joints.shoulder + joints.elbow) + gripperLen;
+      const y = baseHeight + L1 * Math.sin(joints.shoulder) + L2 * Math.sin(joints.shoulder + joints.elbow);
+      const x = Math.cos(joints.base) * r;
+      const z = Math.sin(joints.base) * r;
+      return new THREE.Vector3(x, y, z);
+    }
+
+    function solveIK(target) {
+      const planarX = Math.hypot(target.x, target.z) - gripperLen;
+      const planarY = target.y - baseHeight;
+      const baseAng = Math.atan2(target.z, target.x);
+
+      const d = Math.hypot(planarX, planarY);
+      const maxReach = L1 + L2 - 0.001;
+      const minReach = Math.abs(L1 - L2) + 0.001;
+      const clampedD = THREE.MathUtils.clamp(d, minReach, maxReach);
+
+      const cosElbow = (clampedD * clampedD - L1 * L1 - L2 * L2) / (2 * L1 * L2);
+      const elbowAng = -Math.acos(THREE.MathUtils.clamp(cosElbow, -1, 1));
+
+      const a = Math.atan2(planarY, planarX);
+      const b = Math.atan2(L2 * Math.sin(-elbowAng), L1 + L2 * Math.cos(elbowAng));
+      const shoulderAng = a + b;
+
+      targetJoints.base = baseAng;
+      targetJoints.shoulder = shoulderAng;
+      targetJoints.elbow = elbowAng;
+    }
+
+    function chooseNextObject() {
+      return pickDropObjects.find((item) => !item.moved);
+    }
+
+    function near(a, b, threshold = 0.08) {
+      return a.distanceTo(b) < threshold;
+    }
+
+    function updateStateMachine(dt) {
+      if (state === 'idle') {
+        holdTimer += dt;
+        if (holdTimer > 0.55) {
+          activeItem = chooseNextObject();
+          if (!activeItem) {
+            holdTimer = 0;
+            return;
+          }
+          motion.target.copy(activeItem.pickup).setY(activeItem.pickup.y + motion.hoveringOffset);
+          setState('moving to pickup');
+        }
+        return;
+      }
+
+      if (!activeItem) {
+        setState('idle');
+        return;
+      }
+
+      const tip = forwardKinematics();
+
+      if (state === 'moving to pickup') {
+        solveIK(motion.target);
+        if (near(tip, motion.target, 0.12)) {
+          motion.target.copy(activeItem.pickup).setY(activeItem.pickup.y + 0.17);
+          setState('lifting');
+          logCommand('pickup align');
+        }
+      } else if (state === 'lifting') {
+        solveIK(motion.target);
+        if (near(tip, motion.target, 0.1) && !activeItem.grabbed) {
+          activeItem.grabbed = true;
+          gripper.add(activeItem.mesh);
+          activeItem.mesh.position.set(gripperLen, 0, 0);
+          motion.target.copy(activeItem.drop).setY(activeItem.drop.y + motion.dropLift);
+          setState('moving to drop');
+          logCommand('grip close');
+        }
+      } else if (state === 'moving to drop') {
+        solveIK(motion.target);
+        if (near(tip, motion.target, 0.13)) {
+          motion.target.copy(activeItem.drop).setY(activeItem.drop.y + 0.2);
+          setState('dropping');
+          logCommand('drop align');
+        }
+      } else if (state === 'dropping') {
+        solveIK(motion.target);
+        if (near(tip, motion.target, 0.09)) {
+          scene.add(activeItem.mesh);
+          activeItem.mesh.position.copy(activeItem.drop);
+          activeItem.mesh.rotation.set(0, 0, 0);
+          activeItem.grabbed = false;
+          activeItem.moved = true;
+          logCommand('release object');
+          activeItem = null;
+          holdTimer = 0;
+          setState('idle');
+        }
+      }
+    }
+
+    function updateJointMotion(dt) {
+      const speed = 2.6;
+      for (const key of ['base', 'shoulder', 'elbow']) {
+        const delta = targetJoints[key] - joints[key];
+        const step = THREE.MathUtils.clamp(delta, -speed * dt, speed * dt);
+        joints[key] += step;
+      }
+
+      base.rotation.y = joints.base;
+      shoulderPivot.rotation.z = joints.shoulder;
+      elbowPivot.rotation.z = joints.elbow;
+    }
+
+    function updateGauges() {
+      const limits = {
+        base: [-180, 180],
+        shoulder: [-100, 130],
+        elbow: [-150, 0]
+      };
+
+      for (const [key, ref] of Object.entries(gaugeRefs)) {
+        const deg = THREE.MathUtils.radToDeg(joints[key]);
+        ref.value.textContent = `${deg.toFixed(1)}°`;
+        const [min, max] = limits[key];
+        const percent = THREE.MathUtils.clamp((deg - min) / (max - min), 0, 1);
+        ref.fill.style.width = `${(percent * 100).toFixed(1)}%`;
+      }
+    }
+
+    function drawSpeedGraph(speed) {
+      tipHistory.push(speed);
+      if (tipHistory.length > speedCanvas.width) {
+        tipHistory.shift();
+      }
+
+      speedCtx.clearRect(0, 0, speedCanvas.width, speedCanvas.height);
+
+      speedCtx.strokeStyle = 'rgba(73, 102, 130, 0.35)';
+      speedCtx.lineWidth = 1;
+      for (let y = 22; y < speedCanvas.height; y += 22) {
+        speedCtx.beginPath();
+        speedCtx.moveTo(0, y);
+        speedCtx.lineTo(speedCanvas.width, y);
+        speedCtx.stroke();
+      }
+
+      speedCtx.beginPath();
+      speedCtx.strokeStyle = '#ff8c2a';
+      speedCtx.lineWidth = 2;
+      tipHistory.forEach((v, i) => {
+        const y = speedCanvas.height - THREE.MathUtils.clamp(v * 70, 0, speedCanvas.height - 2) - 2;
+        if (i === 0) speedCtx.moveTo(i, y);
+        else speedCtx.lineTo(i, y);
+      });
+      speedCtx.stroke();
+    }
+
+    logCommand('IK ready');
+    logCommand('queue 8 objects');
+
+    const clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.05);
+
+      updateStateMachine(dt);
+      updateJointMotion(dt);
+      updateGauges();
+
+      const tip = forwardKinematics();
+      const speed = tip.distanceTo(prevTip) / Math.max(dt, 0.0001);
+      prevTip.copy(tip);
+      drawSpeedGraph(speed);
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    prevTip.copy(forwardKinematics());
+    animate();
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+  </script>
+</body>
+</html>
